@@ -4,13 +4,13 @@ use anyhow::{anyhow, Result};
 use esp_idf_svc::{
     eventloop::EspSystemEventLoop,
     hal::{
-        gpio::{AnyIOPin, InputPin, OutputPin},
+        self,
+        gpio::OutputPin,
         ledc::{
             config::TimerConfig, LedcChannel, LedcDriver, LedcTimer, LedcTimerDriver, Resolution,
         },
         peripheral::Peripheral,
         prelude::*,
-        uart::UartDriver,
     },
     nvs::EspDefaultNvsPartition,
     sys::{esp_err_t, esp_err_to_name, ESP_ERR_TIMEOUT},
@@ -32,6 +32,7 @@ pub fn new_pwm<'a, Timer, Channel>(
     timer: impl Peripheral<P = Timer> + 'a,
     channel: impl Peripheral<P = Channel> + 'a,
     pin: impl Peripheral<P = impl OutputPin> + 'a,
+    duty: Option<u32>,
     frequency: Option<Hertz>,
     resolution: Option<Resolution>,
 ) -> Result<LedcDriver<'a>>
@@ -44,7 +45,9 @@ where
     config.resolution = resolution.unwrap_or(Resolution::Bits8);
 
     let timer_driver = LedcTimerDriver::new(timer, &config)?;
-    let ledc_driver = LedcDriver::new(channel, &timer_driver, pin)?;
+    let mut ledc_driver = LedcDriver::new(channel, &timer_driver, pin)?;
+
+    ledc_driver.set_duty(duty.unwrap_or(0))?;
 
     Ok(ledc_driver)
 }
@@ -70,11 +73,13 @@ fn main() -> Result<()> {
             peripherals.pins.gpio5, // blue led
             None,
             None,
+            None,
         )?,
         pwm: new_pwm(
             peripherals.ledc.timer1,
             peripherals.ledc.channel1,
             peripherals.pins.gpio3, // red led
+            Some(256),
             None,
             None,
         )?,
@@ -86,6 +91,7 @@ fn main() -> Result<()> {
             peripherals.ledc.timer0,
             peripherals.ledc.channel0,
             peripherals.pins.gpio8, // built-in led
+            Some(256),
             None,
             None,
         )?,
@@ -95,32 +101,46 @@ fn main() -> Result<()> {
             peripherals.pins.gpio3,
             None,
             None,
+            None,
         )?,
     };
 
     info!("Startting serial loop...");
-    
-    let max_duty = output.pwm.get_max_duty();
-    
-    output.led.set_duty(0).unwrap();
-    output.pwm.set_duty(max_duty).unwrap();
 
-    let config = Default::default();
+    let max_duty = output.pwm.get_max_duty();
+
     // AsyncUartDriver not working properly
-    let serial = UartDriver::new(
+    #[cfg(feature = "esp-c3-32s")]
+    let serial = hal::uart::UartDriver::new(
         peripherals.uart0,
         peripherals.pins.gpio21,
-        peripherals.pins.gpio20.downgrade_input(),
-        Option::<AnyIOPin>::None,
-        Option::<AnyIOPin>::None,
-        &config,
+        peripherals.pins.gpio20,
+        Option::<gpio::AnyIOPin>::None,
+        Option::<gpio::AnyIOPin>::None,
+        &Default::default(),
     )?;
 
+    #[cfg(feature = "esp32-c3-supermini")]
+    let mut serial = hal::usb_serial::UsbSerialDriver::new(
+        peripherals.usb_serial,
+        peripherals.pins.gpio18,
+        peripherals.pins.gpio19,
+        &Default::default(),
+    )?;
 
     let mut string_buf = String::new();
     let mut read_buf = [0u8; 100];
 
+    info!("Serial Fan Controller is up and running!");
+
     loop {
+        #[cfg(feature = "esp32-c3-supermini")]
+        if !serial.is_connected() {
+            info!("USB Serial not connected, waiting 3 seconds...");
+            thread::sleep(Duration::from_secs(3));
+            continue;
+        }
+
         let n = match serial.read(&mut read_buf, 20 / 1000) {
             Ok(n) => n,
             Err(e) => {
@@ -135,6 +155,11 @@ fn main() -> Result<()> {
         };
 
         if n == 0 {
+            #[cfg(feature = "esp32-c3-supermini")]
+            {
+                info!("Timeout reading from serial, waiting 3 seconds...");
+                thread::sleep(Duration::from_secs(3));
+            }
             continue;
         }
 
@@ -168,8 +193,16 @@ fn main() -> Result<()> {
 
         let duty = speed.parse::<u32>().unwrap_or(0);
 
-        output.led.set_duty(duty).unwrap();
-        output.pwm.set_duty(max_duty - duty).unwrap();
+        #[cfg(feature = "esp32-c3-supermini")]
+        {
+            output.led.set_duty(max_duty - duty).unwrap();
+            output.pwm.set_duty(duty).unwrap();
+        }
+        #[cfg(feature = "esp-c3-32s")]
+        {
+            output.led.set_duty(duty).unwrap();
+            output.pwm.set_duty(max_duty - duty).unwrap();
+        }
 
         info!("Set duty to {}", duty);
     }
