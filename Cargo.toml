@@ -1,0 +1,40 @@
+[package]
+name = "serial-fan-controller"
+version = "0.1.0"
+authors = ["as <allensnape@gmail.com>"]
+edition = "2021"
+resolver = "2"
+rust-version = "1.77"
+
+[[bin]]
+name = "serial-fan-controller"
+harness = false # do not use the built in cargo test harness -> resolve rust-analyzer errors
+
+[profile.release]
+opt-level = "s"
+
+[profile.dev]
+debug = true    # Symbols are nice and they don't increase the size on Flash
+opt-level = "z"
+
+[features]
+default = [
+    "esp-c3-32s",
+    # "esp32-c3-supermini",
+]
+esp-c3-32s = []
+esp32-c3-supermini = []
+
+experimental = ["esp-idf-svc/experimental"]
+
+[dependencies]
+log = "0.4"
+esp-idf-svc = { version = "0.50", features = ["critical-section", "embassy-time-driver", "embassy-sync"] }
+anyhow = "1.0.94"
+
+[build-dependencies]
+anyhow = "1.0.94"
+embuild = "0.33"
+
+[dev-dependencies]
+cargo-espflash = "3.2.0"
