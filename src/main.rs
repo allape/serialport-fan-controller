@@ -115,8 +115,8 @@ fn main() -> Result<()> {
         peripherals.uart0,
         peripherals.pins.gpio21,
         peripherals.pins.gpio20,
-        Option::<gpio::AnyIOPin>::None,
-        Option::<gpio::AnyIOPin>::None,
+        Option::<hal::gpio::AnyIOPin>::None,
+        Option::<hal::gpio::AnyIOPin>::None,
         &Default::default(),
     )?;
 
