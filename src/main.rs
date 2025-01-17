@@ -1,6 +1,6 @@
-use std::{ffi::CStr, thread, time::Duration};
+use std::{thread, time::Duration};
 
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 use esp_idf_svc::{
     eventloop::EspSystemEventLoop,
     hal::{
@@ -13,20 +13,12 @@ use esp_idf_svc::{
         prelude::*,
     },
     nvs::EspDefaultNvsPartition,
-    sys::{esp_err_t, esp_err_to_name, ESP_ERR_TIMEOUT},
+    sys::ESP_ERR_TIMEOUT,
 };
 use log::{error, info, warn};
 
-pub fn esp_err_to_str(err: esp_err_t) -> &'static str {
-    cstr_to_str(unsafe { esp_err_to_name(err) }).unwrap_or("Unknown ESP Error")
-}
-
-pub fn cstr_to_str(cstr: *const i8) -> Result<&'static str> {
-    if cstr.is_null() {
-        return Err(anyhow!("null"));
-    }
-    unsafe { Ok(CStr::from_ptr(cstr).to_str()?) }
-}
+static MAX_DUTY: u32 = 255;
+static DELAY: Duration = Duration::from_secs(1);
 
 pub fn new_pwm<'a, Timer, Channel>(
     timer: impl Peripheral<P = Timer> + 'a,
@@ -79,7 +71,7 @@ fn main() -> Result<()> {
             peripherals.ledc.timer1,
             peripherals.ledc.channel1,
             peripherals.pins.gpio3, // red led
-            Some(256),
+            Some(MAX_DUTY),
             None,
             None,
         )?,
@@ -91,7 +83,7 @@ fn main() -> Result<()> {
             peripherals.ledc.timer0,
             peripherals.ledc.channel0,
             peripherals.pins.gpio8, // built-in led
-            Some(256),
+            Some(MAX_DUTY),
             None,
             None,
         )?,
@@ -106,8 +98,6 @@ fn main() -> Result<()> {
     };
 
     info!("Startting serial loop...");
-
-    let max_duty = output.pwm.get_max_duty();
 
     // AsyncUartDriver not working properly
     #[cfg(feature = "esp-c3-32s")]
@@ -134,19 +124,12 @@ fn main() -> Result<()> {
     info!("Serial Fan Controller is up and running!");
 
     loop {
-        #[cfg(feature = "esp32-c3-supermini")]
-        if !serial.is_connected() {
-            info!("USB Serial not connected, waiting 3 seconds...");
-            thread::sleep(Duration::from_secs(3));
-            continue;
-        }
-
         let n = match serial.read(&mut read_buf, 20 / 1000) {
             Ok(n) => n,
             Err(e) => {
                 if e.code() == ESP_ERR_TIMEOUT {
-                    info!("Timeout reading from serial, waiting 3 seconds...");
-                    thread::sleep(Duration::from_secs(3));
+                    info!("Waiting...");
+                    thread::sleep(DELAY);
                 } else {
                     error!("Error reading from serial: {:?}", e);
                 }
@@ -157,8 +140,8 @@ fn main() -> Result<()> {
         if n == 0 {
             #[cfg(feature = "esp32-c3-supermini")]
             {
-                info!("Timeout reading from serial, waiting 3 seconds...");
-                thread::sleep(Duration::from_secs(3));
+                info!("Waiting...");
+                thread::sleep(DELAY);
             }
             continue;
         }
@@ -192,16 +175,17 @@ fn main() -> Result<()> {
         }
 
         let duty = speed.parse::<u32>().unwrap_or(0);
+        let duty = if duty > MAX_DUTY { MAX_DUTY } else { duty };
 
         #[cfg(feature = "esp32-c3-supermini")]
         {
-            output.led.set_duty(max_duty - duty).unwrap();
+            output.led.set_duty(MAX_DUTY - duty).unwrap();
             output.pwm.set_duty(duty).unwrap();
         }
         #[cfg(feature = "esp-c3-32s")]
         {
             output.led.set_duty(duty).unwrap();
-            output.pwm.set_duty(max_duty - duty).unwrap();
+            output.pwm.set_duty(MAX_DUTY - duty).unwrap();
         }
 
         info!("Set duty to {}", duty);
