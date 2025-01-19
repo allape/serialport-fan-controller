@@ -17,8 +17,10 @@ use esp_idf_svc::{
 };
 use log::{error, info, warn};
 
-static MAX_DUTY: u32 = 255;
-static DELAY: Duration = Duration::from_secs(1);
+static MAX_DUTY: u32 = (1 << 8) - 1;
+static RESOLUTION: Resolution = Resolution::Bits8;
+
+static READ_WAIT: Duration = Duration::from_secs(1);
 
 pub fn new_pwm<'a, Timer, Channel>(
     timer: impl Peripheral<P = Timer> + 'a,
@@ -65,7 +67,7 @@ fn main() -> Result<()> {
             peripherals.pins.gpio5, // blue led
             None,
             None,
-            None,
+            Some(RESOLUTION),
         )?,
         pwm: new_pwm(
             peripherals.ledc.timer1,
@@ -73,7 +75,7 @@ fn main() -> Result<()> {
             peripherals.pins.gpio3, // red led
             Some(MAX_DUTY),
             None,
-            None,
+            Some(RESOLUTION),
         )?,
     };
 
@@ -85,7 +87,7 @@ fn main() -> Result<()> {
             peripherals.pins.gpio8, // built-in led
             Some(MAX_DUTY),
             None,
-            None,
+            Some(RESOLUTION),
         )?,
         pwm: new_pwm(
             peripherals.ledc.timer1,
@@ -93,7 +95,7 @@ fn main() -> Result<()> {
             peripherals.pins.gpio3,
             None,
             None,
-            None,
+            Some(RESOLUTION),
         )?,
     };
 
@@ -129,7 +131,7 @@ fn main() -> Result<()> {
             Err(e) => {
                 if e.code() == ESP_ERR_TIMEOUT {
                     info!("Waiting...");
-                    thread::sleep(DELAY);
+                    thread::sleep(READ_WAIT);
                 } else {
                     error!("Error reading from serial: {:?}", e);
                 }
@@ -141,12 +143,15 @@ fn main() -> Result<()> {
             #[cfg(feature = "esp32-c3-supermini")]
             {
                 info!("Waiting...");
-                thread::sleep(DELAY);
+                thread::sleep(READ_WAIT);
             }
             continue;
         }
 
-        let input = std::str::from_utf8(&read_buf[..n]).unwrap();
+        let input = std::str::from_utf8(&read_buf[..n]).unwrap_or("");
+        if input.is_empty() {
+            continue;
+        }
 
         info!("Received {} bytes: {:?}", n, &input);
 
@@ -154,6 +159,12 @@ fn main() -> Result<()> {
             string_buf.push_str(input);
         } else {
             string_buf.push_str(input);
+            continue;
+        }
+
+        if string_buf.len() > 100 {
+            warn!("Buffer is too long, clearing...");
+            string_buf.clear();
             continue;
         }
 
@@ -174,7 +185,13 @@ fn main() -> Result<()> {
             continue;
         }
 
-        let duty = speed.parse::<u32>().unwrap_or(0);
+        let duty = speed.parse::<u32>();
+        if duty.is_err() {
+            warn!("Invalid speed, skipping...");
+            continue;
+        }
+
+        let duty = duty.unwrap();
         let duty = if duty > MAX_DUTY { MAX_DUTY } else { duty };
 
         #[cfg(feature = "esp32-c3-supermini")]
